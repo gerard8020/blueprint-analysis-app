@@ -149,11 +149,11 @@ def get_currently_present() -> pd.DataFrame:
 
 # ── QR helpers ────────────────────────────────────────────────────────────────
 
-def generate_qr_bytes(employee_id: str) -> bytes:
+def generate_qr_bytes(employee_id: str, box_size: int = 10) -> bytes:
     qr = qrcode.QRCode(
         version=1,
-        error_correction=qrcode.constants.ERROR_CORRECT_L,
-        box_size=10,
+        error_correction=qrcode.constants.ERROR_CORRECT_H,  # high correction — reads well off screens
+        box_size=box_size,
         border=4,
     )
     qr.add_data(employee_id)
@@ -162,6 +162,15 @@ def generate_qr_bytes(employee_id: str) -> bytes:
     buf = io.BytesIO()
     img.save(buf, format="PNG")
     return buf.getvalue()
+
+
+def get_user_by_name_or_id(query: str):
+    q = f"%{query.strip()}%"
+    with sqlite3.connect(DB_PATH) as conn:
+        return conn.execute(
+            "SELECT name, employee_id FROM users WHERE name LIKE ? OR employee_id LIKE ? ORDER BY name",
+            (q, q)
+        ).fetchall()
 
 
 def decode_qr_from_upload(image: Image.Image):
@@ -573,6 +582,77 @@ def page_reports():
     )
 
 
+def page_my_qr():
+    st.markdown("## 📱  Get My QR Code")
+    st.markdown(
+        "<p style='color:#6b7280;font-size:15px;'>Type your name below, then <b>screenshot</b> "
+        "your QR code and save it to your phone. Show it at the scanner every day.</p>",
+        unsafe_allow_html=True,
+    )
+
+    query = st.text_input("🔍  Search your name or ID", placeholder="e.g. Maria or EMP001")
+
+    if not query.strip():
+        st.markdown("""
+        <div style="background:#f0f7ff;border-radius:16px;padding:32px;text-align:center;
+                    color:#3b82f6;margin-top:16px;">
+            <div style="font-size:48px;">📲</div>
+            <div style="font-size:16px;font-weight:600;margin-top:10px;">Start typing your name above</div>
+            <div style="font-size:13px;color:#6b7280;margin-top:6px;">Your QR code will appear here</div>
+        </div>
+        """, unsafe_allow_html=True)
+        return
+
+    results = get_user_by_name_or_id(query)
+
+    if not results:
+        st.error("No employee found. Ask your admin to add you first.")
+        return
+
+    for name, employee_id in results:
+        qr_bytes = generate_qr_bytes(employee_id, box_size=14)  # bigger for phone screens
+        qr_b64   = img_to_b64(qr_bytes)
+
+        st.markdown(f"""
+        <div style="
+            background: white;
+            border-radius: 24px;
+            padding: 36px 28px;
+            box-shadow: 0 4px 32px rgba(0,0,0,0.10);
+            text-align: center;
+            max-width: 380px;
+            margin: 20px auto;
+            border: 1px solid #f0f2f6;
+        ">
+            <div style="font-size:22px;font-weight:800;color:#111827;">{name}</div>
+            <div style="
+                display:inline-block;
+                background:#eff6ff;color:#1d4ed8;
+                font-size:13px;font-weight:700;
+                padding:4px 14px;border-radius:20px;margin:6px 0 20px;
+            ">{employee_id}</div>
+            <br/>
+            <img src="data:image/png;base64,{qr_b64}"
+                 style="width:220px;height:220px;border-radius:12px;
+                        border:4px solid #f3f4f6;" />
+            <div style="color:#6b7280;font-size:13px;margin-top:20px;line-height:1.6;">
+                📸 <b>Screenshot this page</b> and save to your photos.<br/>
+                Show this QR code at the scanner each time you arrive or leave.
+            </div>
+        </div>
+        """, unsafe_allow_html=True)
+
+        st.download_button(
+            "⬇️  Save QR to phone",
+            data=qr_bytes,
+            file_name=f"my_qr_{employee_id}.png",
+            mime="image/png",
+            use_container_width=True,
+            key=f"myqr_{employee_id}",
+        )
+        st.markdown("<div style='height:8px;'></div>", unsafe_allow_html=True)
+
+
 # ── Entry point ───────────────────────────────────────────────────────────────
 
 def main():
@@ -597,7 +677,7 @@ def main():
 
         page = st.radio(
             "nav",
-            ["📷  Scanner", "👥  Employees", "📊  Reports"],
+            ["📷  Scanner", "📱  My QR Code", "👥  Employees", "📊  Reports"],
             label_visibility="collapsed",
         )
 
@@ -610,6 +690,7 @@ def main():
 
     pages = {
         "📷  Scanner":   page_scanner,
+        "📱  My QR Code": page_my_qr,
         "👥  Employees": page_users,
         "📊  Reports":   page_reports,
     }
